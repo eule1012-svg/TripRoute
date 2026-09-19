@@ -1,54 +1,148 @@
 # 真实地图制作规范（map-spec）
 
-路线总览中的地图是 SVG（`<svg id="routemap">`，viewBox 建议 `0 0 1000 720`），**必须按真实经纬度投影**，城市相对方位与真实地图一致（用户多次强调）。
+路线总览中的地图**优先使用真实地图底图**（Leaflet + 高德/OSM 瓦片），在真实地理底图上标注城市节点和路线。SVG 手绘示意图仅作为离线备选方案。
 
 ## 一、城市坐标获取（强制）
 
 1. 用搜索验证每个城市的经纬度（高德/百度/谷歌同源的公开坐标即可，如 time-ok.com、latlong.info、维基）。**不得凭记忆编坐标**。
-2. 记录 7 类城市的参考经纬度（每次按实际目的地核实）：
-   - 北京 39.90°N / 116.41°E；昆明 25.04°N / 102.68°E（中国段）
+2. 记录各城市参考经纬度（每次按实际目的地核实）：
+   - 北京 39.90°N / 116.41°E
+   - 乌兰巴托 47.89°N/106.91°E、特日勒吉 48.05°N/107.45°E、成吉思汗雕像 47.80°N/107.20°E
    - 越南：河内 21.03°N/105.85°E、岘港 16.07°N/108.22°E、胡志明 10.82°N/106.63°E
    - 老挝：琅勃拉邦 19.89°N/102.14°E、万荣 18.93°N/102.45°E、万象 17.97°N/102.60°E
-   - 蒙古（未来可参考）：乌兰巴托 47.89°N/106.91°E、额尔登特 49.03°N/104.05°E、达尔汗 49.48°N/105.92°E
 
-## 二、投影计算（线性投影 + 视觉微调）
+## 二、真实地图方案（首选，Leaflet + 高德瓦片）
 
-1. 确定经度范围 LON_MIN–LON_MAX（覆盖全部城市，如 100–117°E）、纬度范围 LAT_MIN–LAT_MAX（如 8–42°N）
-2. 初始坐标：
-   - `x = (lon - LON_MIN) / (LON_MAX - LON_MIN) × 画布宽`
-   - `y = (LAT_MAX - lat) / (LAT_MAX - LAT_MIN) × 画布高`（北在上）
-3. **视觉微调原则**：真实纬度差 <1.5° 的城市（如万荣 18.93 与万象 17.97）投影后会挤在一起、标签必然重叠——此时可在保持"北→南顺序不变"的前提下拉开 y 间距（非线性映射），并在图注写明"城市相对方位与真实地图一致，间距为示意"。
-4. 微调后必须自检：所有城市标签、路线标注、图例互不重叠。
+### 2.1 引入 Leaflet
 
-## 三、SVG 组成
+```html
+<!-- head 中 -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
-```
-<defs> 3 个箭头 marker（arr=金、arrc=珊瑚、arrt=青）
-<rect> 底色（浅色 #F2F6F2，圆角）
-<text> 国家名 + 底部比例示意（如"经度 100°–117°E，纬度 8°–42°N"）
-<path> 国家色块（淡色半透明：中国 #DDE9E0、越南 #F3E3D2、老挝 #E0EBE2；可用 rect rx 圆角）
-<path> 湄公河等标志性河流（可选，虚线）
-<path> 路线 6 条：
-  1 国际航班（出发国→第一国，金色实线虚线 9 7，标注"国际航班 XhXm"）
-  2 境内航班（第一国内部，青色点线 5 7，标注"境内航班 X.Xh"）
-  3 跨境直飞（两国间直飞，珊瑚虚线 7 7，标注"直飞 XhXm"）
-  4 跨境铁路（国境内铁路，青色实线，标注"XX 铁路 Xh"）
-  5 跨境铁路/口岸（铁路出境，青色实线，标注"跨境铁路 Xh"）
-  6 返程航班（回国，青色点线，标注"返程航班 XhXm"）
-<g class="city" data-day="N"> 城市节点（circle + 主名 16px 粗 + 副名 11px；标签放节点上下左右避开路线）
-<g> 图例（竖排放右下角，4–5 项：国际航班/直飞/铁路/境内·返程航班 + "点城市跳转对应日"）
+<!-- body 底部 -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 ```
 
-## 四、交互
+### 2.2 地图容器
 
-- 每个 `.city` g 带 `data-day`，JS 绑定点击 → 展开/滚动到对应 `.day-card`（模板已实现）
-- 城市节点卡 `.city-chip`（JS 从 cities 数组渲染）与地图一致
+```html
+<div id="realmap" style="height:520px;border-radius:10px;z-index:1"></div>
+```
 
-## 五、渲染验证（用户验收必查）
+### 2.3 初始化地图 + 高德瓦片（国内访问优先）
 
-- **截图检查城市方位**：对比真实地图，确认城市相对位置正确（北在上、西在左）
-- **关键坐标标注**：在地图底部图注中标注主要城市的经纬度坐标，便于用户核对
-- 国家色块覆盖对应城市、路线不穿过无关城市
-- 标签不重叠、图例不与节点重叠
-- 用截图 OCR/目测核对每个城市名与副标题可读（全宽显示时城市名 ≥12px）
-- **禁止凭感觉摆放城市位置**——必须按真实经纬度投影计算，不得随意调整方位
+```javascript
+var map = L.map('realmap', {
+  center: [中心纬度, 中心经度],
+  zoom: 5,
+  scrollWheelZoom: false  // 防止页面滚动被地图劫持
+});
+
+// 高德瓦片（国内访问稳定）
+L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+  subdomains: ['1', '2', '3', '4'],
+  attribution: '&copy; 高德地图 AutoNavi',
+  maxZoom: 18
+}).addTo(map);
+```
+
+> 注意：OSM 国际源（tile.openstreetmap.org）在国内/云电脑环境常加载超时，**优先用高德瓦片**。
+
+### 2.4 添加城市标记 + 标签
+
+```javascript
+var cities = [
+  { name: '乌兰巴托', lat: 47.89, lng: 106.91, day: 1, color: '#0E7C76', desc: 'D1·D4-D6 · 首都' },
+  { name: '特日勒吉', lat: 48.05, lng: 107.45, day: 2, color: '#5C7A2E', desc: 'D2-D3 · 国家公园' }
+];
+
+cities.forEach(function(city) {
+  // 圆形标记
+  var marker = L.circleMarker([city.lat, city.lng], {
+    radius: 10,
+    fillColor: city.color,
+    color: '#fff',
+    weight: 3,
+    fillOpacity: 0.9
+  }).addTo(map);
+  marker.bindPopup('<b>' + city.name + '</b><br>' + city.desc);
+  // 点击跳转到对应日
+  marker.on('click', function() {
+    var card = document.querySelectorAll('.day-card')[city.day - 1];
+    if (card) card.scrollIntoView({behavior: 'smooth', block: 'center'});
+  });
+  // 永久标签
+  L.tooltip({
+    permanent: true, direction: 'bottom', offset: [0, -12], className: 'city-label'
+  }).setLatLng([city.lat, city.lng]).setContent(
+    '<b>' + city.name + '</b><br><span style="font-size:11px">' + city.desc + '</span>'
+  ).addTo(map);
+});
+```
+
+### 2.5 绘制路线
+
+```javascript
+// 国际航班（金色虚线）
+L.polyline([
+  [39.90, 116.41],  // 北京
+  [47.89, 106.91]   // 乌兰巴托
+], { color: '#C08A2D', weight: 3, dashArray: '9,7' }).addTo(map);
+
+// 境内包车（绿色实线）
+L.polyline([
+  [47.89, 106.91],  // 乌兰巴托
+  [48.05, 107.45]   // 特日勒吉
+], { color: '#0E7C76', weight: 3 }).addTo(map);
+
+// 返程（绿色点线，半透明）
+L.polyline([...], { color: '#0E7C76', weight: 2.5, dashArray: '5,7', opacity: 0.7 }).addTo(map);
+```
+
+### 2.6 自适应缩放
+
+```javascript
+var group = L.featureGroup(cities.map(function(c) {
+  return L.marker([c.lat, c.lng]);
+}));
+map.fitBounds(group.getBounds().pad(0.1));
+```
+
+### 2.7 标签样式
+
+```css
+.leaflet-popup-content-wrapper { border-radius: 10px; }
+.leaflet-container { font-family: var(--font-sans); }
+.city-label {
+  background: transparent; border: none; box-shadow: none;
+  font-size: 13px; font-weight: 600; color: #1E3836;
+  text-shadow: 0 1px 2px #fff;
+}
+.city-label::before { display: none; }
+```
+
+## 三、SVG 手绘方案（备选，仅离线场景用）
+
+如果无法加载在线瓦片（纯离线交付），可用 SVG 手绘示意图：
+
+- 按真实经纬度线性投影计算 x/y
+- 国家色块淡色半透明
+- 路线用不同线型区分（国际航班金色虚线、包车绿色实线、返程绿色点线）
+- 图注标注关键城市坐标，注明"示意图"
+
+## 四、渲染验证（用户验收必查）
+
+- **截图检查地图瓦片正常加载**：无空白、无裂图、无 `ERR_TIMED_OUT` 错误
+- **城市标记位置正确**：在真实地图底图上位置准确，与实际地理位置一致
+- **路线线型正确**：国际航班（金色虚线）、包车（绿色实线）、返程（绿色点线）
+- **标签可读**：城市名+副标题清晰，不重叠
+- **点击交互正常**：点城市标记能跳转到对应日卡片
+- **移动端可用**：地图容器高度合适，不溢出，手指可拖动缩放
+- **地图 attribution 正确**：footer 标注"地图 © 高德地图 AutoNavi"
+
+## 五、常见坑
+
+- OSM 国际源在国内/云电脑环境加载超时 → **必须用高德瓦片**
+- `scrollWheelZoom: false` 必须设，否则页面滚动时会被地图劫持
+- 城市标签 `permanent: true` 才会常显，否则 hover 才出现
+- `fitBounds` 前要确保所有 marker 已添加，否则缩放范围不对
